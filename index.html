@@ -184,7 +184,7 @@ header{height:var(--hdrh);background:var(--sur);border-bottom:1px solid var(--bo
 <script>
 
 const API='https://script.google.com/macros/s/AKfycbwNFBGU9XYqfFCcvbCh3IcxsXZFwAkqQYANwK7AFfDfD7HIfhJUMPQMFx2MgDvMwSwd0A/exec';
-const APP_VERSION='v20260724-NUEVO-FACT';
+const APP_VERSION='v20260726-NUEVO-FACT2';
 const S={user:null,pin:'',fecha:today(),provs:[],compras:{},tickets:{},screen:'home'};
 
 async function api(a,p){
@@ -716,6 +716,7 @@ async function uploadPendingTickets(){
       if(tr.ok){
         t.uploaded=true;
         t.ticketId=tr.ticketId;
+        t.fileId=tr.fileId;
         t.fileUrl=tr.fileUrl;
         t.displayName=tr.fileName||t.displayName||t.name;
         t.base64Data=b64;
