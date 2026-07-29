@@ -184,7 +184,7 @@ header{height:var(--hdrh);background:var(--sur);border-bottom:1px solid var(--bo
 <script>
 
 const API='https://script.google.com/macros/s/AKfycbwNFBGU9XYqfFCcvbCh3IcxsXZFwAkqQYANwK7AFfDfD7HIfhJUMPQMFx2MgDvMwSwd0A/exec';
-const APP_VERSION='v20260726-NUEVO-FACT2';
+const APP_VERSION='v20260729-NUEVO12';
 const S={user:null,pin:'',fecha:today(),provs:[],compras:{},tickets:{},screen:'home'};
 
 async function api(a,p){
@@ -605,6 +605,11 @@ async function readTicketsWithOcr(){
         proveedorHint:curProv
       });
       if(r.ok && r.productos && r.productos.length){
+        var fac=r.factura||{};
+        t.factura={
+          tda:r.tda||fac.tda||'', op:r.op||fac.op||'', te:r.te||fac.te||'',
+          tr:r.tr||fac.tr||'', tc:r.tc||fac.tc||'', folio:r.folio||fac.folio||''
+        };
         detected.push({ticket:t, proveedor:r.proveedor||curProv, total:r.total||0, productos:r.productos});
       }else{
         toast((t.displayName||t.name||('ticket '+(i+1)))+': '+(r.error||'Sin articulos detectados'),'err');
@@ -706,12 +711,14 @@ async function uploadPendingTickets(){
     var t=pending[ti];
     try{
       var b64=await toB64(t.file);
+      var fac=t.factura||{};
       var tr=await api('uploadTicket',{
         fecha:S.fecha,proveedor:curProv,
         fileName:t.file.name||t.name||('ticket_'+(ti+1)+'.jpg'),
         mimeType:t.file.type||t.mimeType||'image/jpeg',
         base64Data:b64,total:total,
-        ticketIndex:curTickets.indexOf(t)
+        ticketIndex:curTickets.indexOf(t),
+        tda:fac.tda||'',op:fac.op||'',te:fac.te||'',tr:fac.tr||'',tc:fac.tc||'',folio:fac.folio||''
       });
       if(tr.ok){
         t.uploaded=true;
