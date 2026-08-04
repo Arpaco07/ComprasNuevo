@@ -188,7 +188,7 @@ header{height:var(--hdrh);background:var(--sur);border-bottom:1px solid var(--bo
 <script>
 
 const API='https://script.google.com/macros/s/AKfycbwNFBGU9XYqfFCcvbCh3IcxsXZFwAkqQYANwK7AFfDfD7HIfhJUMPQMFx2MgDvMwSwd0A/exec';
-const APP_VERSION='v20260803-NUEVO13';
+const APP_VERSION='v20260804-NUEVO14';
 const S={user:null,pin:'',fecha:today(),provs:[],compras:{},tickets:{},screen:'home'};
 
 async function api(a,p){
@@ -255,6 +255,7 @@ function go(s){
   S.screen=s;
   document.querySelectorAll('.ni').forEach(function(n){n.classList.toggle('active',n.dataset.s===s);});
   el('htitle').textContent=TITLES[s]||s;
+  try{var _v=el('appver');if(_v)_v.style.display=(s==='home'?'block':'none');}catch(e){}
   ({home:pgHome,nueva:pgNueva,buscar:pgBuscar,historial:pgHistorial,balance:pgBalance,usuarios:pgUsuarios})[s]?.();
 }
 document.querySelectorAll('.ni').forEach(function(n){n.addEventListener('click',function(){go(n.dataset.s);});});
@@ -722,9 +723,8 @@ function abrirLote(){
   el('lote-back').addEventListener('click',function(){renderNueva();});
 }
 
-async function procesarLote(files){
-  load(true);toast('Leyendo '+files.length+' ticket(s)...');
-  loteData=[];
+async function _leerLoteFiles(files){
+  var out=[];
   for(var i=0;i<files.length;i++){
     var f=files[i];
     try{
@@ -735,15 +735,45 @@ async function procesarLote(files){
         tda:(r&&r.tda)||facR.tda||'', op:(r&&r.op)||facR.op||'', te:(r&&r.te)||facR.te||'',
         tr:(r&&r.tr)||facR.tr||'', tc:(r&&r.tc)||facR.tc||'', folio:(r&&r.folio)||facR.folio||''
       };
-      loteData.push({
-        file:f, b64:b64, name:f.name||('ticket_'+(i+1)),
+      out.push({
+        file:f, b64:b64, name:(f&&f.name)||'ticket',
         productos:(r&&r.productos)||[], total:(r&&r.total)||0, factura:fac,
         store:guessStore(fac,r&&r.proveedor), ok:!!(r&&r.ok&&r.productos&&r.productos.length)
       });
     }catch(e){
-      loteData.push({file:f,b64:'',name:(f&&f.name)||('ticket_'+(i+1)),productos:[],total:0,factura:{},store:'',ok:false});
+      out.push({file:f,b64:'',name:(f&&f.name)||'ticket',productos:[],total:0,factura:{},store:'',ok:false});
     }
   }
+  return out;
+}
+
+async function procesarLote(files){
+  load(true);toast('Leyendo '+files.length+' ticket(s)...');
+  loteData=await _leerLoteFiles(files);
+  load(false);
+  renderLoteReview();
+}
+
+function _syncLoteFromDOM(){
+  document.querySelectorAll('.lote-store').forEach(function(s){var g=parseInt(s.dataset.g);if(loteData[g])loteData[g].store=s.value;});
+  var per={};
+  document.querySelectorAll('.lot-p').forEach(function(pEl){
+    var key=pEl.dataset.k,g=parseInt(key.split('_')[0]);
+    var prod=(pEl.value||'').trim();
+    var c=parseFloat((document.querySelector('.lot-c[data-k="'+key+'"]')||{}).value)||1;
+    var u=(((document.querySelector('.lot-u[data-k="'+key+'"]')||{}).value)||'pza').trim()||'pza';
+    var pu=parseFloat((document.querySelector('.lot-pu[data-k="'+key+'"]')||{}).value)||0;
+    var t=parseFloat((document.querySelector('.lot-t[data-k="'+key+'"]')||{}).value)||(pu*c);
+    (per[g]=per[g]||[]).push({producto:prod,cantidad:c,unidad:u,precioUnitario:pu,total:t||0});
+  });
+  Object.keys(per).forEach(function(g){ if(loteData[g]) loteData[g].productos=per[g]; });
+}
+
+async function agregarMasLote(files){
+  _syncLoteFromDOM();
+  load(true);toast('Leyendo '+files.length+' m&aacute;s...');
+  var nuevos=await _leerLoteFiles(files);
+  loteData=loteData.concat(nuevos);
   load(false);
   renderLoteReview();
 }
@@ -786,14 +816,18 @@ function renderLoteReview(){
   });
   el('content').innerHTML=
     '<div style="font-size:15px;font-weight:700;margin-bottom:4px">Revisi&oacute;n en lote ('+loteData.length+' ticket(s))</div>'+
-    '<div class="help-note" style="margin-bottom:10px">Confirma la tienda de cada ticket y revisa solo los renglones en rojo. Al guardar, todo va a la lista del d&iacute;a.</div>'+
+    '<div class="help-note" style="margin-bottom:10px">Cada ticket lleva su propia tienda y sus productos, no se mezclan. Revisa solo los renglones en rojo. Puedes <b>agregar m&aacute;s tickets</b> (aunque sean de otra tienda) antes de guardar. Al guardar, todo va a la lista del d&iacute;a.</div>'+
     cards+
-    '<div style="display:flex;gap:8px;margin-top:6px;margin-bottom:24px">'+
+    '<button class="btn btn-o btn-full" id="lote-add" style="margin-bottom:10px">&#10133; Agregar m&aacute;s tickets</button>'+
+    '<input type="file" id="lote-add-input" accept="image/*,application/pdf,.jpg,.jpeg,.png,.pdf" multiple style="display:none"/>'+
+    '<div style="display:flex;gap:8px;margin-top:2px;margin-bottom:24px">'+
       '<button class="btn btn-g" style="flex:2" id="lote-save">&#128190; Guardar todo</button>'+
       '<button class="btn btn-o" style="flex:1" id="lote-cancel">Cancelar</button>'+
     '</div>';
   document.querySelectorAll('.lot-del').forEach(function(b){b.addEventListener('click',function(){var w=b.closest('.lot-row');if(w)w.remove();});});
-  document.querySelectorAll('.lote-del-ticket').forEach(function(b){b.addEventListener('click',function(){loteData.splice(parseInt(b.dataset.g),1);renderLoteReview();});});
+  document.querySelectorAll('.lote-del-ticket').forEach(function(b){b.addEventListener('click',function(){_syncLoteFromDOM();loteData.splice(parseInt(b.dataset.g),1);renderLoteReview();});});
+  el('lote-add').addEventListener('click',function(){el('lote-add-input').click();});
+  el('lote-add-input').addEventListener('change',function(e){var fs=Array.prototype.slice.call(e.target.files||[]);if(fs.length)agregarMasLote(fs);});
   el('lote-save').addEventListener('click',guardarLote);
   el('lote-cancel').addEventListener('click',function(){loteData=[];renderNueva();});
 }
