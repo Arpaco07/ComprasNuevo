@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+<meta http-equiv="Pragma" content="no-cache"/>
+<meta http-equiv="Expires" content="0"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="theme-color" content="#0e0e0e"/>
 <link rel="manifest" href="manifest.json"/>
@@ -181,10 +184,11 @@ header{height:var(--hdrh);background:var(--sur);border-bottom:1px solid var(--bo
 </div>
 <div id="toast"></div>
 <div id="loading" class="hidden"><div class="sp"></div></div>
+<div id="appver" style="position:fixed;left:6px;bottom:68px;font-size:9px;color:#555;z-index:5;pointer-events:none;font-family:monospace"></div>
 <script>
 
 const API='https://script.google.com/macros/s/AKfycbwNFBGU9XYqfFCcvbCh3IcxsXZFwAkqQYANwK7AFfDfD7HIfhJUMPQMFx2MgDvMwSwd0A/exec';
-const APP_VERSION='v20260729-NUEVO12';
+const APP_VERSION='v20260803-NUEVO13';
 const S={user:null,pin:'',fecha:today(),provs:[],compras:{},tickets:{},screen:'home'};
 
 async function api(a,p){
@@ -397,11 +401,13 @@ function renderNueva(){
   });
   chips+='<div class="chip new" id="chip-new">+ Otro</div>';
   el('content').innerHTML=
-    '<div style="font-size:11px;color:var(--wdim);margin-bottom:8px">Selecciona el proveedor</div>'+
+    '<button class="btn btn-o btn-full" id="btn-lote" style="margin-bottom:12px">&#9889; Captura en lote (varios tickets)</button>'+
+    '<div style="font-size:11px;color:var(--wdim);margin-bottom:8px">O captura tienda por tienda &mdash; selecciona el proveedor</div>'+
     '<div style="display:flex;flex-wrap:wrap;margin-bottom:12px">'+chips+'</div>'+
     '<div id="prov-form">'+(curProv?renderProvForm():'')+'</div>';
   document.querySelectorAll('.chip[data-nombre]').forEach(function(c){c.addEventListener('click',function(){pickProv(c);});});
   el('chip-new').addEventListener('click',newProvModal);
+  var bl=el('btn-lote');if(bl)bl.addEventListener('click',abrirLote);
   if(curProv)wireProvForm();
 }
 
@@ -666,6 +672,177 @@ function openOcrReview(detected){
 
 function escapeHtml(s){
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ══════════════════ CAPTURA EN LOTE (NUEVO13) ══════════════════
+   Sube todas las fotos de golpe → lee cada una → reconoce la tienda por
+   su código (aprende las nuevas) → marca solo renglones dudosos →
+   guarda TODO en la misma lista del día (mismo saveCompras). No toca
+   el flujo "tienda por tienda". */
+var loteData=[];
+function loteCodeMap(){try{return JSON.parse(localStorage.getItem('loteCodeMap')||'{}');}catch(e){return{};}}
+function loteSaveCodeMap(m){try{localStorage.setItem('loteCodeMap',JSON.stringify(m||{}));}catch(e){}}
+function provNames(){return (S.provs||[]).map(function(p){return p.nombre;});}
+function matchProv(name){
+  if(!name)return '';
+  var names=provNames(),i;
+  for(i=0;i<names.length;i++){if(names[i].toLowerCase()===String(name).toLowerCase())return names[i];}
+  for(i=0;i<names.length;i++){var a=names[i].toLowerCase(),b=String(name).toLowerCase();if(b.indexOf(a)>=0||a.indexOf(b)>=0)return names[i];}
+  return '';
+}
+function guessStore(fac,detectedName){
+  var map=loteCodeMap();
+  var tda=(fac&&fac.tda)?String(fac.tda).trim():'';
+  if(tda){
+    if(map[tda]&&provNames().indexOf(map[tda])>=0)return map[tda];
+    if(tda==='6277'){var s=matchProv("Sam's Club")||matchProv("Sams")||matchProv("Sam");if(s)return s;}
+  }
+  return matchProv(detectedName);
+}
+function lineFlag(it){
+  var pu=parseFloat(it.precioUnitario)||0,c=parseFloat(it.cantidad)||0,t=parseFloat(it.total)||0;
+  if(t<=0)return true;
+  if(pu<=0)return true;
+  if(Math.abs(pu*c-t)>0.5)return true;
+  return false;
+}
+
+function abrirLote(){
+  loteData=[];
+  el('content').innerHTML=
+    '<div class="card" style="padding:14px;margin-bottom:12px">'+
+      '<div style="font-size:15px;font-weight:700;margin-bottom:6px">&#9889; Captura en lote</div>'+
+      '<div class="help-note" style="margin-bottom:12px">Selecciona <b>todas las fotos</b> de los tickets del d&iacute;a. La app las lee, reconoce la tienda por su c&oacute;digo cuando puede, y te marca solo los renglones dudosos. Todo se guarda en la lista del d&iacute;a, igual que siempre.</div>'+
+      '<button class="btn btn-g btn-full" id="lote-pick">&#128247; Seleccionar fotos</button>'+
+      '<input type="file" id="lote-input" accept="image/*,application/pdf,.jpg,.jpeg,.png,.pdf" multiple style="display:none"/>'+
+    '</div>'+
+    '<button class="btn btn-o btn-full" id="lote-back">&#8592; Volver a tienda por tienda</button>';
+  el('lote-pick').addEventListener('click',function(){el('lote-input').click();});
+  el('lote-input').addEventListener('change',function(e){var fs=Array.prototype.slice.call(e.target.files||[]);if(fs.length)procesarLote(fs);});
+  el('lote-back').addEventListener('click',function(){renderNueva();});
+}
+
+async function procesarLote(files){
+  load(true);toast('Leyendo '+files.length+' ticket(s)...');
+  loteData=[];
+  for(var i=0;i<files.length;i++){
+    var f=files[i];
+    try{
+      var b64=await toB64(f);
+      var r=await api('ocrTicket',{fecha:S.fecha,proveedorHint:'',mimeType:f.type||'image/jpeg',base64Data:b64});
+      var facR=(r&&r.factura)||{};
+      var fac={
+        tda:(r&&r.tda)||facR.tda||'', op:(r&&r.op)||facR.op||'', te:(r&&r.te)||facR.te||'',
+        tr:(r&&r.tr)||facR.tr||'', tc:(r&&r.tc)||facR.tc||'', folio:(r&&r.folio)||facR.folio||''
+      };
+      loteData.push({
+        file:f, b64:b64, name:f.name||('ticket_'+(i+1)),
+        productos:(r&&r.productos)||[], total:(r&&r.total)||0, factura:fac,
+        store:guessStore(fac,r&&r.proveedor), ok:!!(r&&r.ok&&r.productos&&r.productos.length)
+      });
+    }catch(e){
+      loteData.push({file:f,b64:'',name:(f&&f.name)||('ticket_'+(i+1)),productos:[],total:0,factura:{},store:'',ok:false});
+    }
+  }
+  load(false);
+  renderLoteReview();
+}
+
+function renderLoteReview(){
+  if(!loteData.length){renderNueva();return;}
+  var opts=function(sel){
+    var o='<option value="">&mdash; elige tienda &mdash;</option>';
+    provNames().forEach(function(n){o+='<option value="'+escapeHtml(n)+'"'+(sel===n?' selected':'')+'>'+escapeHtml(n)+'</option>';});
+    return o;
+  };
+  var cards='';
+  loteData.forEach(function(d,gi){
+    var flagged=d.productos.filter(lineFlag).length;
+    var badge=d.store?'<span class="badge bg">'+escapeHtml(d.store)+'</span>':'<span class="badge" style="background:var(--redbg);color:var(--red)">elegir tienda</span>';
+    cards+='<div class="card" style="padding:10px;margin-bottom:12px">'+
+      '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:8px">'+
+        '<div style="font-size:12px;font-weight:700">Ticket '+(gi+1)+((d.factura&&d.factura.tda)?' &middot; TDA#'+escapeHtml(d.factura.tda):'')+'</div>'+badge+
+      '</div>'+
+      '<div class="fg" style="margin-bottom:8px"><label class="fl">Tienda</label><select class="fi lote-store" data-g="'+gi+'">'+opts(d.store)+'</select></div>';
+    if(!d.ok){cards+='<div class="help-note" style="color:var(--red);margin-bottom:6px">No se pudo leer este ticket. Qu&iacute;talo y captr&uacute;alo por tienda.</div>';}
+    if(flagged){cards+='<div class="help-note" style="color:var(--gold);margin-bottom:6px">&#9888; '+flagged+' rengl&oacute;n(es) por revisar (marcados en rojo).</div>';}
+    d.productos.forEach(function(it,ii){
+      var key=gi+'_'+ii,bad=lineFlag(it);
+      cards+='<div class="add-form open lot-row" style="display:block;margin-bottom:8px'+(bad?';border:1px solid var(--red);border-radius:8px;padding:8px':'')+'">'+
+        '<div class="fr3">'+
+          '<div class="fg"><label class="fl">Producto</label><input class="fi lot-p" data-k="'+key+'" value="'+escapeHtml(it.producto||'')+'"/></div>'+
+          '<div class="fg"><label class="fl">Cantidad</label><input type="number" step="0.01" min="0" class="fi lot-c" data-k="'+key+'" value="'+(it.cantidad||1)+'"/></div>'+
+          '<div class="fg"><label class="fl">Unidad</label><input class="fi lot-u" data-k="'+key+'" value="'+escapeHtml(it.unidad||'pza')+'"/></div>'+
+        '</div>'+
+        '<div class="fr">'+
+          '<div class="fg"><label class="fl">P.U.</label><input type="number" step="0.01" min="0" class="fi lot-pu" data-k="'+key+'" value="'+(it.precioUnitario||0)+'"/></div>'+
+          '<div class="fg"><label class="fl">Total</label><input type="number" step="0.01" min="0" class="fi lot-t" data-k="'+key+'" value="'+(it.total||0)+'"/></div>'+
+        '</div>'+
+        '<div style="display:flex;justify-content:flex-end"><button class="btn btn-d btn-sm lot-del" data-k="'+key+'">Eliminar rengl&oacute;n</button></div>'+
+      '</div>';
+    });
+    cards+='<div style="display:flex;justify-content:flex-end"><button class="btn btn-o btn-sm lote-del-ticket" data-g="'+gi+'">Quitar este ticket</button></div>'+
+      '</div>';
+  });
+  el('content').innerHTML=
+    '<div style="font-size:15px;font-weight:700;margin-bottom:4px">Revisi&oacute;n en lote ('+loteData.length+' ticket(s))</div>'+
+    '<div class="help-note" style="margin-bottom:10px">Confirma la tienda de cada ticket y revisa solo los renglones en rojo. Al guardar, todo va a la lista del d&iacute;a.</div>'+
+    cards+
+    '<div style="display:flex;gap:8px;margin-top:6px;margin-bottom:24px">'+
+      '<button class="btn btn-g" style="flex:2" id="lote-save">&#128190; Guardar todo</button>'+
+      '<button class="btn btn-o" style="flex:1" id="lote-cancel">Cancelar</button>'+
+    '</div>';
+  document.querySelectorAll('.lot-del').forEach(function(b){b.addEventListener('click',function(){var w=b.closest('.lot-row');if(w)w.remove();});});
+  document.querySelectorAll('.lote-del-ticket').forEach(function(b){b.addEventListener('click',function(){loteData.splice(parseInt(b.dataset.g),1);renderLoteReview();});});
+  el('lote-save').addEventListener('click',guardarLote);
+  el('lote-cancel').addEventListener('click',function(){loteData=[];renderNueva();});
+}
+
+async function guardarLote(){
+  document.querySelectorAll('.lote-store').forEach(function(s){var g=parseInt(s.dataset.g);if(loteData[g])loteData[g].store=s.value;});
+  var perTicket={};
+  document.querySelectorAll('.lot-p').forEach(function(pEl){
+    var key=pEl.dataset.k,g=parseInt(key.split('_')[0]);
+    var prod=(pEl.value||'').trim();if(!prod)return;
+    var c=parseFloat((document.querySelector('.lot-c[data-k="'+key+'"]')||{}).value)||1;
+    var u=(((document.querySelector('.lot-u[data-k="'+key+'"]')||{}).value)||'pza').trim()||'pza';
+    var pu=parseFloat((document.querySelector('.lot-pu[data-k="'+key+'"]')||{}).value)||0;
+    var t=parseFloat((document.querySelector('.lot-t[data-k="'+key+'"]')||{}).value)||(pu*c);
+    (perTicket[g]=perTicket[g]||[]).push({producto:prod,cantidad:c,unidad:u,precioUnitario:pu,total:t||0});
+  });
+  var conItems=Object.keys(perTicket).filter(function(k){return perTicket[k].length;});
+  if(!conItems.length){toast('No hay art&iacute;culos para guardar','err');return;}
+  for(var ci=0;ci<conItems.length;ci++){var g2=parseInt(conItems[ci]);if(!loteData[g2].store){toast('Falta elegir la tienda del ticket '+(g2+1),'err');return;}}
+  load(true);
+  var allItems=[],okUp=0,map=loteCodeMap();
+  for(var gi=0;gi<loteData.length;gi++){
+    var d=loteData[gi],items=perTicket[gi]||[];
+    if(!items.length)continue;
+    var totalTicket=items.reduce(function(s,x){return s+(parseFloat(x.total)||0);},0);
+    var ticketId='';
+    try{
+      var tr=await api('uploadTicket',{
+        fecha:S.fecha,proveedor:d.store,
+        fileName:d.name||('ticket_'+(gi+1)+'.jpg'),
+        mimeType:(d.file&&d.file.type)||'image/jpeg',
+        base64Data:d.b64,total:totalTicket,ticketIndex:gi,
+        tda:d.factura.tda||'',op:d.factura.op||'',te:d.factura.te||'',tr:d.factura.tr||'',tc:d.factura.tc||'',folio:d.factura.folio||''
+      });
+      if(tr&&tr.ok){ticketId=tr.ticketId||'';okUp++;}
+    }catch(e){}
+    if(d.factura.tda){map[String(d.factura.tda).trim()]=d.store;}
+    items.forEach(function(it){
+      allItems.push({producto:it.producto,cantidad:it.cantidad,unidad:it.unidad,precioUnitario:it.precioUnitario,total:it.total,proveedor:d.store,ticketId:ticketId,ticketIds:ticketId?[ticketId]:[]});
+    });
+  }
+  loteSaveCodeMap(map);
+  var r=await api('saveCompras',{fecha:S.fecha,items:allItems});
+  load(false);
+  if(r&&r.ok){
+    toast(allItems.length+' art&iacute;culo(s) guardados en lote','ok');
+    loteData=[];S.compras={};S.tickets={};
+    go('home');
+  }else{toast((r&&r.error)||'Error guardando el lote','err');}
 }
 
 function acceptOcrItems(){
@@ -1207,6 +1384,23 @@ async function pSave(pid){
 
 el('hdate').textContent=fmtS(today());
 el('hav').addEventListener('click',uMenu);
+
+/* ── ANTI-CACHÉ / AUTO-ACTUALIZACIÓN ──
+   Al abrir, compara la versión que corre contra la publicada en GitHub;
+   si hay una más nueva, recarga sola (sin borrar caché a mano). */
+try{var _av=el('appver');if(_av)_av.textContent=APP_VERSION;}catch(e){}
+(async function checkForUpdate(){
+  try{
+    if(location.search.indexOf('v=')>=0)return;
+    var res=await fetch(location.pathname+'?_ac='+Date.now(),{cache:'no-store'});
+    if(!res.ok)return;
+    var txt=await res.text();
+    var m=txt.match(/const APP_VERSION='([^']*)'/);
+    if(m&&m[1]&&m[1]!==APP_VERSION){
+      location.replace(location.pathname+'?v='+encodeURIComponent(m[1]));
+    }
+  }catch(e){}
+})();
 
 </script>
 </body>
