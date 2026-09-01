@@ -188,7 +188,7 @@ header{height:var(--hdrh);background:var(--sur);border-bottom:1px solid var(--bo
 <script>
 
 const API='https://script.google.com/macros/s/AKfycbwNFBGU9XYqfFCcvbCh3IcxsXZFwAkqQYANwK7AFfDfD7HIfhJUMPQMFx2MgDvMwSwd0A/exec';
-const APP_VERSION='v20260804-NUEVO14';
+const APP_VERSION='v20260804-NUEVO15';
 const S={user:null,pin:'',fecha:today(),provs:[],compras:{},tickets:{},screen:'home'};
 
 async function api(a,p){
@@ -603,7 +603,7 @@ async function readTicketsWithOcr(){
     try{
       var b64=t.base64Data || (t.file?await toB64(t.file):'');
       if(!b64){toast((t.displayName||t.name||('ticket '+(i+1)))+': no tiene imagen para OCR','err');continue;}
-      var r=await api('ocrTicket',{
+      var r=await ocrConReintento({
         fecha:S.fecha,
         proveedor:curProv,
         mimeType:(t.file&&t.file.type)||t.mimeType||'image/jpeg',
@@ -723,13 +723,26 @@ function abrirLote(){
   el('lote-back').addEventListener('click',function(){renderNueva();});
 }
 
+// Reintenta la lectura si Gemini contesta "saturado" (503). No insiste si ya no hay cuota del día.
+async function ocrConReintento(payload){
+  var intentos=3, r=null;
+  for(var k=0;k<intentos;k++){
+    r=await api('ocrTicket',payload);
+    if(r && r.ok && r.productos && r.productos.length) return r;
+    var txt=(r?(String(r.error||'')+' '+String(r.message||'')+' '+String(r.http||'')):'').toLowerCase();
+    if(/429|resource_exhausted|quota|l[ií]mite/.test(txt)) return r; // sin cuota: no sirve reintentar
+    if(k<intentos-1){ toast('Gemini saturado, reintentando ('+(k+2)+'/'+intentos+')...'); await new Promise(function(res){setTimeout(res,3000);}); }
+  }
+  return r;
+}
+
 async function _leerLoteFiles(files){
   var out=[];
   for(var i=0;i<files.length;i++){
     var f=files[i];
     try{
       var b64=await toB64(f);
-      var r=await api('ocrTicket',{fecha:S.fecha,proveedorHint:'',mimeType:f.type||'image/jpeg',base64Data:b64});
+      var r=await ocrConReintento({fecha:S.fecha,proveedorHint:'',mimeType:f.type||'image/jpeg',base64Data:b64});
       var facR=(r&&r.factura)||{};
       var fac={
         tda:(r&&r.tda)||facR.tda||'', op:(r&&r.op)||facR.op||'', te:(r&&r.te)||facR.te||'',
