@@ -144,6 +144,15 @@ header{height:var(--hdrh);background:var(--sur);border-bottom:1px solid var(--bo
 .facv{flex:1;font-size:13px;color:#ededed;word-break:break-all}
 .faccopy{background:var(--gold);color:#1a1a1a;border:none;border-radius:7px;padding:5px 11px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap}
 .faccopy.okcopy{background:#2e7d32;color:#fff}
+.factstate{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:9px;flex-wrap:wrap}
+.factbar{display:flex;align-items:center;gap:9px;padding:10px 12px;border-radius:var(--r);margin-bottom:11px;font-size:12px;border:1px solid var(--bord)}
+.factbar.done{background:var(--okbg);border-color:rgba(76,175,80,.3);color:#81c784}
+.factbar.pend{background:var(--redbg);border-color:rgba(217,83,79,.3);color:#e6a5a3}
+.factbar-tx{flex:1}.factbar-ic{font-size:15px}
+.ctrl-day{display:flex;align-items:center;gap:11px;background:var(--card);border:1px solid var(--bord);border-radius:var(--r);padding:11px 13px;margin-bottom:7px;cursor:pointer;transition:all .12s}
+.ctrl-day:active{transform:scale(.98);border-color:var(--gold)}
+.ctrl-ic{font-size:16px}.ctrl-info{flex:1}.ctrl-date{font-size:13px;font-weight:600}.ctrl-sub{font-size:11px;color:var(--wdim);margin-top:2px}.ctrl-arrow{color:var(--wdim);font-size:18px}
+.tkt-badge.nofac{background:var(--wfaint);color:var(--wdim)}
 .facopen{display:inline-block;margin-top:7px;font-size:11px;color:var(--gold);text-decoration:none}
 </style>
 </head>
@@ -188,7 +197,7 @@ header{height:var(--hdrh);background:var(--sur);border-bottom:1px solid var(--bo
 <script>
 
 const API='https://script.google.com/macros/s/AKfycbwNFBGU9XYqfFCcvbCh3IcxsXZFwAkqQYANwK7AFfDfD7HIfhJUMPQMFx2MgDvMwSwd0A/exec';
-const APP_VERSION='v20260804-NUEVO15';
+const APP_VERSION='v20260912-FACTURADO2';
 const S={user:null,pin:'',fecha:today(),provs:[],compras:{},tickets:{},screen:'home'};
 
 async function api(a,p){
@@ -276,6 +285,11 @@ async function pgHome(){
   var total=items.reduce(function(s,c){return s+(parseFloat(c.total)||0);},0);
   var provList=Object.keys(S.compras);
   var tickCount=Object.values(S.tickets).reduce(function(s,a){return s+a.length;},0);
+  var allTk=[];Object.values(S.tickets).forEach(function(a){allTk=allTk.concat(a);});
+  var factables=allTk.filter(function(t){return t.factura!==false;});
+  var factCount=factables.filter(function(t){return t.facturado;}).length;
+  var facturablesCount=factables.length;
+  var pendCount=facturablesCount-factCount;
 
   var detalle='';
   provList.forEach(function(p){
@@ -295,6 +309,7 @@ async function pgHome(){
         detalle+='<div class="facrow"><span class="fack">'+c[0]+'</span><span class="facv mono">'+v+'</span><button class="faccopy" data-copy="'+v+'">&#128203; Copiar</button></div>';
       });
       if(t.fileUrl)detalle+='<a class="facopen" href="'+t.fileUrl+'" target="_blank" rel="noopener">&#128065;&#65039; Abrir imagen del ticket</a>';
+      detalle+=facturadoRow(t);
       detalle+='</div>';
     });
     (S.compras[p]||[]).forEach(function(it){
@@ -321,6 +336,11 @@ async function pgHome(){
     '<div class="stat"><div class="slbl">Total del dia</div><div class="sval g" style="font-size:18px">'+money(total)+'</div></div>'+
     '<div class="stat"><div class="slbl">Articulos</div><div class="sval">'+items.length+'</div><div class="ssub">'+tickCount+' ticket(s)</div></div>'+
     '</div>'+
+    (facturablesCount?('<div class="factbar '+(pendCount?'pend':'done')+'">'+
+      '<span class="factbar-ic">'+(pendCount?'&#9888;&#65039;':'&#10004;')+'</span>'+
+      '<span class="factbar-tx">Facturaci&oacute;n del d&iacute;a: <b>'+factCount+' de '+facturablesCount+'</b>'+(pendCount?(' &middot; faltan '+pendCount):' &middot; completo')+'</span>'+
+      (S.user&&S.user.rol==='admin'?'<button class="btn btn-o btn-sm" id="btn-control">&#128203; Control</button>':'')+
+    '</div>'):'')+
     (provList.length
       ?'<div class="card"><div class="ctitle">&#128196; Detalle del dia</div>'+detalle+'</div>'
       :'<div class="empty"><div class="empty-ic">&#10022;</div><div class="empty-tx">Sin compras para esta fecha</div></div>'
@@ -336,6 +356,74 @@ async function pgHome(){
   el('btn-xlsx').addEventListener('click',function(){genReport('xlsx');});
   el('btn-pdf').addEventListener('click',function(){genReport('pdf');});
   el('btn-tix').addEventListener('click',function(){genReport('tickets');});
+  var bctrl=el('btn-control');if(bctrl)bctrl.addEventListener('click',openControl);
+  document.querySelectorAll('.fact-toggle[data-id]').forEach(function(b){
+    b.addEventListener('click',function(){toggleFacturado(b.dataset.id,b.dataset.to==='1');});
+  });
+}
+
+// Fila de estado facturado dentro de la cajita "Datos para facturar"
+function facturadoRow(t){
+  if(t.factura===false){
+    return '<div class="factstate"><span class="tkt-badge nofac">&#128203; Solo control &mdash; no se factura</span></div>';
+  }
+  var h='<div class="factstate">';
+  if(t.facturado){
+    var quien=t.usuarioFacturado?(' &middot; '+t.usuarioFacturado):'';
+    var cuando=t.fechaFacturado?(' &middot; '+t.fechaFacturado):'';
+    h+='<span class="tkt-badge ok">&#10004; Facturado'+quien+cuando+'</span>';
+    h+='<button class="btn btn-o btn-sm fact-toggle" data-id="'+t.id+'" data-to="0">Quitar</button>';
+  }else{
+    h+='<span class="tkt-badge wait">&#8987; Pendiente de facturar</span>';
+    h+='<button class="btn btn-g btn-sm fact-toggle" data-id="'+t.id+'" data-to="1">Marcar facturado</button>';
+  }
+  h+='</div>';
+  return h;
+}
+
+async function toggleFacturado(id,to){
+  load(true);
+  var r=await api('setTicketFacturado',{id:id,facturado:to});
+  load(false);
+  if(!r||!r.ok){toast((r&&r.error)||'No se pudo marcar','err');return;}
+  toast(to?'Marcado como facturado':'Marca quitada','ok');
+  pgHome();
+}
+
+// Tablero de control: semáforo de facturación por día (últimos 30 días)
+async function openControl(){
+  var hasta=today();
+  var dd=new Date();dd.setDate(dd.getDate()-29);
+  var desde=dd.getFullYear()+'-'+pad(dd.getMonth()+1)+'-'+pad(dd.getDate());
+  load(true);
+  var r=await api('getFacturacionResumen',{desde:desde,hasta:hasta});
+  load(false);
+  if(!r||!r.ok){toast((r&&r.error)||'Error','err');return;}
+  var dias=r.dias||[],res=r.resumen||{};
+  var h='<div class="help-note" style="margin-bottom:10px">&#128994; a tiempo &middot; &#128993; facturado tarde &middot; &#128308; pendiente. Ultimos 30 dias. Toca un dia para ver el detalle.</div>';
+  h+='<div class="stats" style="margin-bottom:12px">'+
+    '<div class="stat"><div class="slbl">Facturados</div><div class="sval" style="font-size:18px;color:#81c784">'+(res.facturados||0)+'/'+(res.tickets||0)+'</div></div>'+
+    '<div class="stat"><div class="slbl">Pendientes</div><div class="sval" style="font-size:18px;color:'+((res.pendientes||0)?'#e6a5a3':'var(--wdim)')+'">'+(res.pendientes||0)+'</div><div class="ssub">'+(res.tarde||0)+' tarde</div></div>'+
+  '</div>';
+  if(!dias.length){
+    h+='<div class="empty"><div class="empty-ic">&#128203;</div><div class="empty-tx">Sin tickets en el periodo</div></div>';
+  }else{
+    dias.forEach(function(d){
+      var ic=d.estado==='verde'?'&#128994;':(d.estado==='ambar'?'&#128993;':(d.estado==='rojo'?'&#128308;':'&#9898;'));
+      var sub=d.facturados+'/'+d.total+' facturados'+(d.pendientes?(' &middot; '+d.pendientes+' pend.'):'')+(d.tarde?(' &middot; '+d.tarde+' tarde'):'');
+      h+='<div class="ctrl-day" data-f="'+d.fecha+'">'+
+        '<span class="ctrl-ic">'+ic+'</span>'+
+        '<div class="ctrl-info"><div class="ctrl-date">'+fmtS(d.fecha)+'</div><div class="ctrl-sub">'+sub+'</div></div>'+
+        '<span class="ctrl-arrow">&#8250;</span>'+
+      '</div>';
+    });
+  }
+  oModal(h,'&#128203; Control de facturacion');
+  setTimeout(function(){
+    document.querySelectorAll('.ctrl-day[data-f]').forEach(function(b){
+      b.addEventListener('click',function(){showDay(b.dataset.f);});
+    });
+  },60);
 }
 
 /* FIX 1: genReport — manejo correcto de errores de configuración */
@@ -1144,11 +1232,15 @@ async function showDay(fecha){
   if(ticks.length){
     h+='<div class="divider"></div><div class="ctitle">Tickets del dia</div>';
     ticks.forEach(function(t){
-      h+='<div class="fb" style="margin-bottom:6px;font-size:12px;gap:8px">'+
-        '<span style="flex:1">'+t.proveedor+'</span>'+
-        '<div style="display:flex;gap:8px">'+
+      var noFac=(t.factura===false);
+      var fact=!!t.facturado;
+      h+='<div class="fb" style="margin-bottom:6px;font-size:12px;gap:8px;flex-wrap:wrap">'+
+        '<span style="flex:1;min-width:80px">'+t.proveedor+'</span>'+
+        (noFac?'<span class="tkt-badge nofac">Solo control</span>':(fact?'<span class="tkt-badge ok">&#10004; Facturado</span>':'<span class="tkt-badge wait">&#8987; Pendiente</span>'))+
+        '<div style="display:flex;gap:6px">'+
+        (noFac?'':'<button class="btn '+(fact?'btn-o':'btn-g')+' btn-sm day-fact" data-id="'+t.id+'" data-to="'+(fact?'0':'1')+'">'+(fact?'Quitar':'Facturado')+'</button>')+
         '<a href="'+t.fileUrl+'" target="_blank" class="btn btn-o btn-sm">Ver &#128206;</a>'+
-        (isAdmin?'<button class="btn btn-d btn-sm day-del-ticket" data-id="'+t.id+'">Eliminar</button>':'')+
+        (isAdmin?'<button class="btn btn-d btn-sm day-del-ticket" data-id="'+t.id+'">&#10006;</button>':'')+
         '</div></div>';
     });
   }
@@ -1178,6 +1270,16 @@ async function showDay(fecha){
     });
     document.querySelectorAll('.day-del-ticket[data-id]').forEach(function(b){
       b.addEventListener('click',function(){deleteTicketModal(b.dataset.id,fecha);});
+    });
+    document.querySelectorAll('.day-fact[data-id]').forEach(function(b){
+      b.addEventListener('click',async function(){
+        load(true);
+        var r=await api('setTicketFacturado',{id:b.dataset.id,facturado:b.dataset.to==='1'});
+        load(false);
+        if(!r||!r.ok){toast((r&&r.error)||'Error','err');return;}
+        toast(b.dataset.to==='1'?'Marcado facturado':'Marca quitada','ok');
+        showDay(fecha);
+      });
     });
   },60);
 }
@@ -1357,7 +1459,7 @@ async function pgUsuarios(){
   html+='<div class="divider"></div><div class="card"><div class="ctitle">Proveedores</div>';
   S.provs.forEach(function(p){
     html+='<div class="fb" style="padding:7px 0;border-bottom:1px solid var(--bord);font-size:13px">'+
-      '<span>'+p.nombre+' <span class="badge bgray" style="font-size:9px">'+(p.tieneTicket?'ticket':'manual')+'</span></span>'+
+      '<span>'+p.nombre+' <span class="badge bgray" style="font-size:9px">'+(p.tieneTicket?'ticket':'manual')+'</span> '+(p.factura?'<span class="badge bgreen" style="font-size:9px">factura</span>':'<span class="badge bgray" style="font-size:9px">no factura</span>')+'</span>'+
       '<button class="btn btn-o btn-sm p-ed" data-p="'+encodeURIComponent(JSON.stringify(p))+'">&#9998;</button></div>';
   });
   html+='<button class="btn btn-o btn-full btn-sm mt12" id="btn-new-p">+ Agregar proveedor</button></div>';
@@ -1416,6 +1518,10 @@ function pForm(p){
       '<option value="true" '+(p&&p.tieneTicket!==false?'selected':'')+'>Si — se puede fotografiar</option>'+
       '<option value="false" '+(p&&p.tieneTicket===false?'selected':'')+'>No — entrada manual</option>'+
     '</select></div>'+
+    '<div class="fg"><label class="fl">Factura? (genera IVA)</label><select class="fi" id="pf-f">'+
+      '<option value="true" '+(p&&p.factura?'selected':'')+'>Si — entra al control de facturacion</option>'+
+      '<option value="false" '+(!p||p.factura===false?'selected':'')+'>No — solo control de compra</option>'+
+    '</select></div>'+
     '<button class="btn btn-g btn-full" id="btn-pfs">'+(p?'Guardar':'Agregar')+'</button>';
   var pid=p?p.id:'';
   oModal(h);
@@ -1423,8 +1529,9 @@ function pForm(p){
 }
 async function pSave(pid){
   var n=el('pf-n')&&el('pf-n').value.trim();var t=el('pf-t')&&el('pf-t').value==='true';
+  var f=el('pf-f')&&el('pf-f').value==='true';
   if(!n){toast('Escribe el nombre','err');return;}
-  load(true);var pv={nombre:n,tieneTicket:t};if(pid)pv.id=pid;
+  load(true);var pv={nombre:n,tieneTicket:t,factura:f};if(pid)pv.id=pid;
   var r=await api('saveProveedor',{proveedor:pv});load(false);cModal();
   if(r.ok){toast('Guardado','ok');await loadProvs();pgUsuarios();}else toast(r.error||'Error','err');
 }
