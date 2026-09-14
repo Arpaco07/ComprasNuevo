@@ -198,7 +198,7 @@ header{height:var(--hdrh);background:var(--sur);border-bottom:1px solid var(--bo
 <script>
 
 const API='https://script.google.com/macros/s/AKfycbwNFBGU9XYqfFCcvbCh3IcxsXZFwAkqQYANwK7AFfDfD7HIfhJUMPQMFx2MgDvMwSwd0A/exec';
-const APP_VERSION='v20260912-FACTURADO3';
+const APP_VERSION='v20260912-FACTURADO4';
 const S={user:null,pin:'',fecha:today(),provs:[],compras:{},tickets:{},screen:'home'};
 
 async function api(a,p){
@@ -360,9 +360,10 @@ function facturadoRow(t){
   }
   var h='<div class="factstate">';
   if(t.facturado){
+    var fol=t.folioFactura?(' &middot; folio '+t.folioFactura):'';
     var quien=t.usuarioFacturado?(' &middot; '+t.usuarioFacturado):'';
     var cuando=t.fechaFacturado?(' &middot; '+t.fechaFacturado):'';
-    h+='<span class="tkt-badge ok">&#10004; Facturado'+quien+cuando+'</span>';
+    h+='<span class="tkt-badge ok">&#10004; Facturado'+fol+quien+cuando+'</span>';
     h+='<button class="btn btn-o btn-sm fact-toggle" data-id="'+t.id+'" data-to="0">Quitar</button>';
   }else{
     h+='<span class="tkt-badge wait">&#8987; Pendiente de facturar</span>';
@@ -372,13 +373,49 @@ function facturadoRow(t){
   return h;
 }
 
-async function toggleFacturado(id,to){
+function toggleFacturado(id,to){
+  if(to){
+    pedirFolioFactura(id, function(){cModal();pgHome();}, cModal);
+  }else{
+    desmarcarFact(id, pgHome);
+  }
+}
+
+// Modal que pide el folio de la factura (candado: sin folio no se marca)
+function pedirFolioFactura(id, onDone, onCancel){
+  var h='<div class="mtitle">&#129534; Marcar como facturado</div>'+
+    '<div class="fg"><label class="fl">Folio de la factura</label>'+
+    '<input type="text" class="fi" id="ff-input" placeholder="Ej. A-12345 o el folio fiscal" autocomplete="off"/></div>'+
+    '<div class="help-note" style="margin-bottom:12px">Escribe el folio de la factura que te dieron. Sin folio no se puede marcar como facturado.</div>'+
+    '<div style="display:flex;gap:8px">'+
+      '<button class="btn btn-g" style="flex:1" id="ff-ok">Confirmar facturado</button>'+
+      '<button class="btn btn-o btn-sm" id="ff-cancel">Cancelar</button>'+
+    '</div>';
+  oModal(h);
+  setTimeout(function(){
+    var inp=el('ff-input');if(inp)inp.focus();
+    var ok=el('ff-ok'),ca=el('ff-cancel');
+    if(ca)ca.addEventListener('click',function(){(onCancel||cModal)();});
+    if(ok)ok.addEventListener('click',async function(){
+      var folio=inp&&inp.value.trim();
+      if(!folio){toast('Escribe el folio de la factura','err');if(inp)inp.focus();return;}
+      load(true);
+      var r=await api('setTicketFacturado',{id:id,facturado:true,folioFactura:folio});
+      load(false);
+      if(!r||!r.ok){toast((r&&r.error)||'No se pudo marcar','err');return;}
+      toast('Marcado como facturado','ok');
+      (onDone||cModal)();
+    });
+  },60);
+}
+
+async function desmarcarFact(id,onDone){
   load(true);
-  var r=await api('setTicketFacturado',{id:id,facturado:to});
+  var r=await api('setTicketFacturado',{id:id,facturado:false});
   load(false);
-  if(!r||!r.ok){toast((r&&r.error)||'No se pudo marcar','err');return;}
-  toast(to?'Marcado como facturado':'Marca quitada','ok');
-  pgHome();
+  if(!r||!r.ok){toast((r&&r.error)||'Error','err');return;}
+  toast('Marca quitada','ok');
+  if(onDone)onDone();
 }
 
 // Pantalla Control (pestaña del nav): semáforo de facturación por día (últimos 30 días)
@@ -1235,7 +1272,7 @@ async function showDay(fecha, soloTickets){
       var fact=!!t.facturado;
       h+='<div class="fb" style="margin-bottom:6px;font-size:12px;gap:8px;flex-wrap:wrap">'+
         '<span style="flex:1;min-width:80px">'+t.proveedor+'</span>'+
-        (noFac?'<span class="tkt-badge nofac">Solo control</span>':(fact?'<span class="tkt-badge ok">&#10004; Facturado</span>':'<span class="tkt-badge wait">&#8987; Pendiente</span>'))+
+        (noFac?'<span class="tkt-badge nofac">Solo control</span>':(fact?'<span class="tkt-badge ok">&#10004; Facturado'+(t.folioFactura?(' &middot; '+t.folioFactura):'')+'</span>':'<span class="tkt-badge wait">&#8987; Pendiente</span>'))+
         '<div style="display:flex;gap:6px">'+
         (noFac?'':'<button class="btn '+(fact?'btn-o':'btn-g')+' btn-sm day-fact" data-id="'+t.id+'" data-to="'+(fact?'0':'1')+'">'+(fact?'Quitar':'Facturado')+'</button>')+
         '<a href="'+t.fileUrl+'" target="_blank" class="btn btn-o btn-sm">Ver &#128206;</a>'+
@@ -1273,13 +1310,13 @@ async function showDay(fecha, soloTickets){
       b.addEventListener('click',function(){deleteTicketModal(b.dataset.id,fecha);});
     });
     document.querySelectorAll('.day-fact[data-id]').forEach(function(b){
-      b.addEventListener('click',async function(){
-        load(true);
-        var r=await api('setTicketFacturado',{id:b.dataset.id,facturado:b.dataset.to==='1'});
-        load(false);
-        if(!r||!r.ok){toast((r&&r.error)||'Error','err');return;}
-        toast(b.dataset.to==='1'?'Marcado facturado':'Marca quitada','ok');
-        showDay(fecha,soloTickets);
+      b.addEventListener('click',function(){
+        var volver=function(){showDay(fecha,soloTickets);};
+        if(b.dataset.to==='1'){
+          pedirFolioFactura(b.dataset.id, volver, volver);
+        }else{
+          desmarcarFact(b.dataset.id, volver);
+        }
       });
     });
   },60);
